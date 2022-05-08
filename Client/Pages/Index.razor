@@ -1,0 +1,568 @@
+﻿@page "/"
+
+@inject IJSRuntime JSRuntime
+
+<BECanvas Width="1024" Height="768" @ref="Canvas"></BECanvas>
+
+@code
+{
+    private WebGLContext WebGLCtx;
+
+    private BECanvasComponent Canvas;
+
+    private WebGLProgram WebGLProgram;
+
+    private float CurrentAngle;
+
+    private DateTime LastRender;
+
+    private const string VSHADER_SOURCE = @"
+        precision mediump float;
+
+        attribute vec4 a_Color;
+        attribute vec4 a_Normal;
+        attribute vec4 a_Position;
+        uniform vec3 u_AmbientLight;
+        uniform vec3 u_LightColor;
+        uniform vec3 u_LightDirection;
+        uniform mat4 u_MvpMatrix;
+        uniform mat4 u_NormalMatrix;
+        varying vec4 v_Color;
+
+        void main() {
+            gl_Position = u_MvpMatrix * a_Position;
+            v_Color = a_Color;
+
+            // Calculate the color due to diffuse relflection
+            vec3 normal = normalize(vec3(u_NormalMatrix * a_Normal));
+            float nDotL = max(dot(u_LightDirection, normal), 0.0);
+            vec3 diffuse = u_LightColor * a_Color.rgb * nDotL;
+
+            // Color due to ambient reflection
+            vec3 ambient = u_AmbientLight * a_Color.rgb;
+
+            v_Color = vec4(diffuse + ambient, a_Color.a);
+        }";
+
+    private const string FSHADER_SOURCE = @"
+        precision mediump float;
+
+        varying vec4 v_Color;
+
+        void main() {
+            gl_FragColor = v_Color;
+        }";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender is false) {
+            return;
+        }
+
+        LastRender = DateTime.Now;
+        CurrentAngle = 0.0f;
+
+        WebGLCtx = await Canvas.CreateWebGLAsync(new WebGLContextAttributes
+        {
+            PowerPreference = WebGLContextAttributes.POWER_PREFERENCE_HIGH_PERFORMANCE
+        });
+
+        WebGLProgram = await InitProgramAsync(WebGLCtx, VSHADER_SOURCE, FSHADER_SOURCE);
+
+        await WebGLCtx.UseProgramAsync(WebGLProgram);
+
+        await WebGLCtx.EnableAsync(EnableCap.DEPTH_TEST);
+
+        await WebGLCtx.ClearColorAsync(0, 0, 0, 1);
+        await WebGLCtx.ClearAsync(BufferBits.COLOR_BUFFER_BIT | BufferBits.DEPTH_BUFFER_BIT);
+
+        await JSRuntime.InvokeAsync<object>("initRenderJS", DotNetObjectReference.Create(this));
+    }
+
+    [JSInvokable]
+    public async ValueTask RenderInBlazor(float timeStamp)
+    {
+        try
+        {
+            await DrawAsync();
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine(e.Message);
+        }
+    }
+
+    public async Task DrawAsync()
+    {
+        // Degrees per second
+        float ANGLE_STEP = 45.0f;
+
+        DateTime now = DateTime.Now;
+        float elapsedMilliseconds = (float)(now - LastRender).TotalMilliseconds;
+
+        CurrentAngle += (ANGLE_STEP * elapsedMilliseconds) / 1000.0f;
+        CurrentAngle %= 360.0f;
+
+        LastRender = now;
+
+        await WebGLCtx.ClearAsync(BufferBits.COLOR_BUFFER_BIT | BufferBits.DEPTH_BUFFER_BIT);
+
+        /*
+         * Red Gear
+         */
+
+        Matrix4 redGearMatrix = new();
+        redGearMatrix.Translate(0.0f, 0.0f, -40.0f);
+        redGearMatrix.Rotate(20.0f, 1.0f, 0.0f, 0.0f);
+        redGearMatrix.Rotate(30.0f, 0.0f, 1.0f, 0.0f);
+        redGearMatrix.Translate(-3.0f, -1.7f, 0.0f);
+        redGearMatrix.Rotate(CurrentAngle, 0.0f, 0.0f, 1.0f);
+
+        float[] red = new[] { 0.8f, 0.1f, 0.0f };
+        List<float> gear = Gear(1.0f, 4.0f, 1.0f, 20, 0.7f, red);
+
+        await DrawGearAsync(redGearMatrix, gear);
+
+        /*
+         * Green Gear
+         */
+
+        Matrix4 greenGearMatrix = new();
+        greenGearMatrix.Translate(0.0f, 0.0f, -40.0f);
+        greenGearMatrix.Rotate(20.0f, 1.0f, 0.0f, 0.0f);
+        greenGearMatrix.Rotate(30.0f, 0.0f, 1.0f, 0.0f);
+        greenGearMatrix.Translate(3.1f, -1.7f, 0.0f);
+        greenGearMatrix.Rotate(-2.0f * CurrentAngle - 9.0f, 0.0f, 0.0f, 1.0f);
+
+        float[] green = new[] { 0.0f, 0.8f, 0.2f };
+        gear = Gear(0.5f, 2.0f, 2.0f, 10, 0.7f, green);
+
+        await DrawGearAsync(greenGearMatrix, gear);
+
+        /*
+         * Blue Gear
+         */
+
+        Matrix4 blueGearMatrix = new();
+        blueGearMatrix.Translate(0.0f, 0.0f, -40.0f);
+        blueGearMatrix.Rotate(20.0f, 1.0f, 0.0f, 0.0f);
+        blueGearMatrix.Rotate(30.0f, 0.0f, 1.0f, 0.0f);
+        blueGearMatrix.Translate(-3.1f, 4.5f, 0.0f);
+        blueGearMatrix.Rotate(-2.0f * CurrentAngle - 25.0f, 0.0f, 0.0f, 1.0f);
+
+        float[] blue = new[] { 0.2f, 0.2f, 1.0f };
+
+        gear = Gear(0.5f, 2.0f, 2.0f, 10, 0.7f, blue);
+
+        await DrawGearAsync(blueGearMatrix, gear);
+    }
+
+    public async Task DrawGearAsync(Matrix4 modelMatrix, List<float> gear)
+    {
+        /*
+         * MVP Matrix
+         */
+
+        float h = (float)Canvas.Height / (float)Canvas.Width;
+
+        Matrix4 mvpMatrix = new();
+        mvpMatrix.SetOrtho(-1.0f, 1.0f,  -h, h,  1.0f, 70.0f);
+        // TODO: why do we need this?
+        mvpMatrix.Scale(0.13f, 0.13f, 0.13f);
+
+        mvpMatrix.Multiply(modelMatrix);
+
+        WebGLUniformLocation u_MvpMatrix = await WebGLCtx.GetUniformLocationAsync(WebGLProgram, "u_MvpMatrix");
+        await WebGLCtx.UniformMatrixAsync(u_MvpMatrix, false, mvpMatrix.Elements);
+
+        int bytesVertex = sizeof(float) * 4;
+        int bytesNormal = sizeof(float) * 3;
+        int bytesColor = sizeof(float) * 3;
+        int offsetVertex = 0;
+        int offsetNormal = offsetVertex + bytesVertex;
+        int offsetColor = offsetNormal + bytesNormal;
+        int stride = bytesVertex + bytesNormal + bytesColor;
+
+        WebGLBuffer gearBuffer = await WebGLCtx.CreateBufferAsync();
+        await WebGLCtx.BindBufferAsync(BufferType.ARRAY_BUFFER, gearBuffer);
+        await WebGLCtx.BufferDataAsync(BufferType.ARRAY_BUFFER, gear.ToArray(), BufferUsageHint.STATIC_DRAW);
+
+        /*
+         * Vertices
+         */
+
+        uint a_Position = (uint)(await WebGLCtx.GetAttribLocationAsync(WebGLProgram, "a_Position"));
+        await WebGLCtx.VertexAttribPointerAsync(a_Position, 4, DataType.FLOAT, false, stride, offsetVertex);
+        await WebGLCtx.EnableVertexAttribArrayAsync(a_Position);
+
+        /*
+         * Colors
+         */
+
+        uint a_Color = (uint)(await WebGLCtx.GetAttribLocationAsync(WebGLProgram, "a_Color"));
+        await WebGLCtx.VertexAttribPointerAsync(a_Color, 3, DataType.FLOAT, false, stride, offsetColor);
+        await WebGLCtx.EnableVertexAttribArrayAsync(a_Color);
+
+        /*
+         * Normals
+         */
+
+        uint a_Normal = (uint)(await WebGLCtx.GetAttribLocationAsync(WebGLProgram, "a_Normal"));
+        await WebGLCtx.VertexAttribPointerAsync(a_Normal, 3, DataType.FLOAT, false, stride, offsetNormal);
+        await WebGLCtx.EnableVertexAttribArrayAsync(a_Normal);
+
+        /*
+         * Lighting
+         */
+
+        WebGLUniformLocation u_AmbientLight = await WebGLCtx.GetUniformLocationAsync(WebGLProgram, "u_AmbientLight");
+        WebGLUniformLocation u_LightColor = await WebGLCtx.GetUniformLocationAsync(WebGLProgram, "u_LightColor");
+        WebGLUniformLocation u_LightDirection = await WebGLCtx.GetUniformLocationAsync(WebGLProgram, "u_LightDirection");
+
+        // Ambient Light
+        await WebGLCtx.UniformAsync(u_AmbientLight, 0.4f, 0.4f, 0.4f);
+
+        // Diffuse White Light
+        await WebGLCtx.UniformAsync(u_LightColor, 1.0f, 1.0f, 1.0f);
+
+        Vector3 lightDirection = new Vector3(0.5f, 3.0f, 4.0f);
+        lightDirection.Normalize();
+        await WebGLCtx.UniformAsync(u_LightDirection, lightDirection.Elements);
+
+        /*
+         * Lighting.. normals
+         */
+
+        Matrix4 normalMatrix = new();
+        normalMatrix.SetInverseOf(modelMatrix);
+        normalMatrix.Transpose();
+
+        WebGLUniformLocation u_NormalMatrix = await WebGLCtx.GetUniformLocationAsync(WebGLProgram, "u_NormalMatrix");
+        await WebGLCtx.UniformMatrixAsync(u_NormalMatrix, false, normalMatrix.Elements);
+
+        /*
+         * Draw
+         */
+
+        await WebGLCtx.BeginBatchAsync();
+        await WebGLCtx.DrawArraysAsync(Primitive.TRIANGLES, 0, gear.Count() / 10);
+        await WebGLCtx.EndBatchAsync();
+
+        await WebGLCtx.DeleteBufferAsync(gearBuffer);
+    }
+
+    public List<float> Gear(float inner_radius, float outer_radius, float width, int _teeth, float tooth_depth, float[] color)
+    {
+        float r0, r1, r2;
+        float angle, da;
+        float u, v, len;
+
+        float teeth = _teeth;
+        
+        r0 = inner_radius;
+        r1 = (float)(outer_radius - tooth_depth / 2.0f);
+        r2 = (float)(outer_radius + tooth_depth / 2.0f);
+        
+        da = (float)(2.0f * Math.PI / teeth / 4.0f);
+
+        List<float> gear = new();
+        List<IEnumerable<float>> vertexes = new();
+
+        void glQuadStrip()
+        {
+            while (vertexes.Count() >= 4)
+            {
+                gear.AddRange(vertexes[0]);
+                gear.AddRange(vertexes[1]);
+                gear.AddRange(vertexes[2]);
+
+                gear.AddRange(vertexes[1]);
+                gear.AddRange(vertexes[3]);
+                gear.AddRange(vertexes[2]);
+
+                vertexes.RemoveAt(0);
+                vertexes.RemoveAt(0);
+            }
+        }
+
+        void glQuads()
+        {
+            while (vertexes.Count() >= 4)
+            {
+                gear.AddRange(vertexes[0]);
+                gear.AddRange(vertexes[1]);
+                gear.AddRange(vertexes[2]);
+
+                gear.AddRange(vertexes[0]);
+                gear.AddRange(vertexes[2]);
+                gear.AddRange(vertexes[3]);
+
+                vertexes.RemoveAt(0);
+                vertexes.RemoveAt(0);
+                vertexes.RemoveAt(0);
+                vertexes.RemoveAt(0);
+            }
+        }
+
+        float[] normal = new[] { 0.0f, 0.0f, 1.0f };
+
+        /* draw front face */
+        for (float i = 0.0f; i <= teeth; i++)
+        {
+            angle = (float)(i * 2.0f * Math.PI / teeth);
+            
+            vertexes.Add(new double[] { r0 * Math.Cos(angle), r0 * Math.Sin(angle), width * 0.5f, 1.0f }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+
+            vertexes.Add(new double[] { r1 * Math.Cos(angle), r1 * Math.Sin(angle), width * 0.5f, 1.0f }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+
+            if (i < teeth) {
+                vertexes.Add(new double[] { r0 * Math.Cos(angle), r0 * Math.Sin(angle), width * 0.5f, 1.0f }
+                    .Select(d => (float)d)
+                    .Concat(normal)
+                    .Concat(color));
+
+                vertexes.Add(new double[] { r1 * Math.Cos(angle + 3f * da), r1 * Math.Sin(angle + 3f * da), width * 0.5f, 1.0f }
+                    .Select(d => (float)d)
+                    .Concat(normal)
+                    .Concat(color));
+            }
+
+            glQuadStrip();
+        }
+
+        /* draw front sides of teeth */
+        da = (float)(2.0f * Math.PI / teeth / 4.0f);
+        for (float i = 0; i <= teeth; i++)
+        {
+            angle = (float)(i * 2.0f * Math.PI / teeth);
+
+            vertexes.Add(new double[] { r1 * Math.Cos(angle), r1 * Math.Sin(angle), width * 0.5, 1.0f }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+            
+            vertexes.Add(new double[] { r2 * Math.Cos(angle + da), r2 * Math.Sin(angle + da), width * 0.5, 1.0f }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+            
+            vertexes.Add(new double[] { r2 * Math.Cos(angle + 2 * da), r2 * Math.Sin(angle + 2 * da), width * 0.5, 1.0f }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+            
+            vertexes.Add(new double[] { r1 * Math.Cos(angle + 3 * da), r1 * Math.Sin(angle + 3 * da), width * 0.5, 1.0f }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+
+            // TODO: why?
+            vertexes.Reverse();
+
+            glQuads();
+        }
+
+        normal = new[] { 0.0f, 0.0f, -1.0f };
+
+        /* draw back face */
+        for (float i = 0; i <= teeth; i++)
+        {
+           angle = (float)(i * 2.0f * Math.PI / teeth);
+
+           vertexes.Add(new double[] { r1 * Math.Cos(angle), r1 * Math.Sin(angle), -width * 0.5, 1.0 }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+           vertexes.Add(new double[] { r0 * Math.Cos(angle), r0 * Math.Sin(angle), -width * 0.5, 1.0 }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+
+           if (i < teeth) {
+              vertexes.Add(new double[] { r1 * Math.Cos(angle + 3 * da), r1 * Math.Sin(angle + 3 * da), -width * 0.5, 1.0 }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+
+              vertexes.Add(new double[] { r0 * Math.Cos(angle), r0 * Math.Sin(angle), -width * 0.5, 1.0 }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+           }
+
+            glQuadStrip();
+        }
+
+        /* draw back sides of teeth */
+        da = (float)(2.0f * Math.PI / teeth / 4.0f);
+        for (float i = 0; i < teeth; i++)
+        {
+            angle = (float)(i * 2.0 * Math.PI / teeth);
+            
+            vertexes.Add(new double[] { r1 * Math.Cos(angle + 3 * da), r1 * Math.Sin(angle + 3 * da), -width * 0.5, 1.0 }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+            
+            vertexes.Add(new double[] { r2 * Math.Cos(angle + 2 * da), r2 * Math.Sin(angle + 2 * da), -width * 0.5, 1.0 }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+            
+            vertexes.Add(new double[] { r2 * Math.Cos(angle + da), r2 * Math.Sin(angle + da), -width * 0.5, 1.0 }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+            
+            vertexes.Add(new double[] { r1 * Math.Cos(angle), r1 * Math.Sin(angle), -width * 0.5, 1.0 }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+            
+            // TODO: why?
+            vertexes.Reverse();
+            
+            glQuads();
+        }
+
+        /* draw outward faces of teeth */
+        for (float i = 0; i < teeth; i++)
+        {
+            angle = (float)(i * 2.0f * Math.PI / teeth);
+            
+            vertexes.Add(new double[] { r1 * Math.Cos(angle), r1 * Math.Sin(angle), width * 0.5, 1.0f }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+            vertexes.Add(new double[] { r1 * Math.Cos(angle), r1 * Math.Sin(angle), -width * 0.5, 1.0f }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+            
+            u = (float)(r2 * Math.Cos(angle + da) - r1 * Math.Cos(angle));
+            v = (float)(r2 * Math.Sin(angle + da) - r1 * Math.Sin(angle));
+            len = (float)Math.Sqrt(u * u + v * v);
+            u /= len;
+            v /= len;
+            normal = new[] { v, -u, 0.0f };
+            
+            vertexes.Add(new double[] { r2 * Math.Cos(angle + da), r2 * Math.Sin(angle + da), width * 0.5, 1.0f }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+            vertexes.Add(new double[] { r2 * Math.Cos(angle + da), r2 * Math.Sin(angle + da), -width * 0.5, 1.0f }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+
+            normal = new[] { (float)Math.Cos(angle), (float)Math.Sin(angle), 0.0f };
+
+            vertexes.Add(new double[] { r2 * Math.Cos(angle + 2 * da), r2 * Math.Sin(angle + 2 * da), width * 0.5, 1.0f }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+            vertexes.Add(new double[] { r2 * Math.Cos(angle + 2 * da), r2 * Math.Sin(angle + 2 * da), -width * 0.5, 1.0f }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+
+            u = (float)(r1 * Math.Cos(angle + 3 * da) - r2 * Math.Cos(angle + 2 * da));
+            v = (float)(r1 * Math.Sin(angle + 3 * da) - r2 * Math.Sin(angle + 2 * da));
+            normal = new[] { v, -u, 0.0f };
+
+            vertexes.Add(new double[] { r1 * Math.Cos(angle + 3 * da), r1 * Math.Sin(angle + 3 * da), width * 0.5, 1.0f }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+            vertexes.Add(new double[] { r1 * Math.Cos(angle + 3 * da), r1 * Math.Sin(angle + 3 * da), -width * 0.5, 1.0f }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+
+            normal = new[] { (float)Math.Cos(angle), (float)Math.Sin(angle), 0.0f };
+        }
+        
+        vertexes.Add(new double[] { r1 * Math.Cos(0), r1 * Math.Sin(0), width * 0.5, 1.0f }
+            .Select(d => (float)d)
+            .Concat(normal)
+            .Concat(color));
+        vertexes.Add(new double[] { r1 * Math.Cos(0), r1 * Math.Sin(0), -width * 0.5, 1.0f }
+            .Select(d => (float)d)
+            .Concat(normal)
+            .Concat(color));
+
+        glQuadStrip();
+        
+        /* draw inside radius cylinder */
+        for (float i = 0; i <= teeth; i++)
+        {
+            angle = (float)(i * 2.0 * Math.PI / teeth);
+
+            normal = new[] { (float)-Math.Cos(angle), (float)-Math.Sin(angle), 0.0f };
+
+            vertexes.Add(new double[] { r0 * Math.Cos(angle), r0 * Math.Sin(angle), -width * 0.5, 1.0f }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+            vertexes.Add(new double[] { r0 * Math.Cos(angle), r0 * Math.Sin(angle), width * 0.5, 1.0f }
+                .Select(d => (float)d)
+                .Concat(normal)
+                .Concat(color));
+        }
+
+        glQuadStrip();
+
+        // Console.WriteLine($"--- {gear.Count()}");
+
+        return gear;
+    }
+
+    private async Task<WebGLProgram> InitProgramAsync(WebGLContext gl, string vsSource, string fsSource)
+    {
+        WebGLShader vertexShader = await LoadShaderAsync(gl, ShaderType.VERTEX_SHADER, vsSource);
+        WebGLShader fragmentShader = await LoadShaderAsync(gl, ShaderType.FRAGMENT_SHADER, fsSource);
+
+        WebGLProgram program = await gl.CreateProgramAsync();
+
+        await gl.AttachShaderAsync(program, vertexShader);
+        await gl.AttachShaderAsync(program, fragmentShader);
+        await gl.LinkProgramAsync(program);
+
+        await gl.DeleteShaderAsync(vertexShader);
+        await gl.DeleteShaderAsync(fragmentShader);
+
+        if (!await gl.GetProgramParameterAsync<bool>(program, ProgramParameter.LINK_STATUS))
+        {
+            string info = await gl.GetProgramInfoLogAsync(program);
+
+            throw new Exception("An error occured while linking the program: " + info);
+        }
+
+        return program;
+    }
+
+    private async Task<WebGLShader> LoadShaderAsync(WebGLContext gl, ShaderType type, string source)
+    {
+        WebGLShader shader = await gl.CreateShaderAsync(type);
+
+        await gl.ShaderSourceAsync(shader, source);
+        await gl.CompileShaderAsync(shader);
+
+        if (!await gl.GetShaderParameterAsync<bool>(shader, ShaderParameter.COMPILE_STATUS))
+        {
+            string info = await gl.GetShaderInfoLogAsync(shader);
+
+            await gl.DeleteShaderAsync(shader);
+
+            throw new Exception("An error occured while compiling the shader: " + info);
+        }
+
+        return shader;
+    }
+}
