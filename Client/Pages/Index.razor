@@ -2,7 +2,29 @@
 
 @inject IJSRuntime JSRuntime
 
-<BECanvas Width="@Width" Height="@Height" @ref="Canvas"></BECanvas>
+<div class="container">
+    <BECanvas Width="@Width" Height="@Height" @ref="Canvas"></BECanvas>
+
+    <div id="overlay">
+        <div>FPS&nbsp;&nbsp;&nbsp;&nbsp;@(FPS.ToString("0.00"))</div>
+        <div>Angle <span style="white-space: pre">@(String.Format("{0,6:###.00}", CurrentAngle))</span></div>
+    </div>
+</div>
+
+<style>
+    .container {
+        position: relative;
+    }
+    #overlay {
+        position: absolute;
+        left: 10px;
+        top: 10px;
+        background-color: rgba(255, 255, 255, 0.2);
+        color: white;
+        font-family: monospace;
+        padding: 1em;
+    }
+</style>
 
 @code
 {
@@ -12,7 +34,9 @@
 
     private WebGLProgram WebGLProgram;
 
-    private float CurrentAngle;
+    private float FPS { get; set; }
+
+    private float CurrentAngle { get; set; }
 
     private DateTime LastRender;
 
@@ -118,10 +142,11 @@
 
         CurrentAngle += (ANGLE_STEP * elapsedMilliseconds) / 1000.0f;
         CurrentAngle %= 360.0f;
+        FPS = (float)(1.0 / (DateTime.Now - LastRender).TotalSeconds);
 
-        double fps = 1.0 / (DateTime.Now - LastRender).TotalSeconds;
+        StateHasChanged();
+
         LastRender = now;
-        // Console.WriteLine(fps);
 
         await WebGLCtx.ClearAsync(BufferBits.COLOR_BUFFER_BIT | BufferBits.DEPTH_BUFFER_BIT);
 
