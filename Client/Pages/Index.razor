@@ -2,7 +2,7 @@
 
 @inject IJSRuntime JSRuntime
 
-<BECanvas Width="1024" Height="768" @ref="Canvas"></BECanvas>
+<BECanvas Width="@Width" Height="@Height" @ref="Canvas"></BECanvas>
 
 @code
 {
@@ -15,6 +15,16 @@
     private float CurrentAngle;
 
     private DateTime LastRender;
+
+    private int Width { get; set; }
+
+    private int Height { get; set; }
+
+    private List<float> RedGear;
+
+    private List<float> GreenGear;
+
+    private List<float> BlueGear;
 
     private const string VSHADER_SOURCE = @"
         precision mediump float;
@@ -76,20 +86,26 @@
         await WebGLCtx.ClearColorAsync(0, 0, 0, 1);
         await WebGLCtx.ClearAsync(BufferBits.COLOR_BUFFER_BIT | BufferBits.DEPTH_BUFFER_BIT);
 
-        await JSRuntime.InvokeAsync<object>("initRenderJS", DotNetObjectReference.Create(this));
+        await JSRuntime.InvokeAsync<object>("JsFunctions.initRenderJs", DotNetObjectReference.Create(this));
+
+        await JSRuntime.InvokeVoidAsync("JsFunctions.addResizeListenerEvent");
+    }
+
+    [JSInvokable]
+    public async ValueTask ResizeInBlazor(int width, int height)
+    {
+        Width = width;
+        Height = height;
+
+        await WebGLCtx.ViewportAsync(0, 0, Width, Height);
+
+        StateHasChanged();
     }
 
     [JSInvokable]
     public async ValueTask RenderInBlazor(float timeStamp)
     {
-        try
-        {
-            await DrawAsync();
-        }
-        catch (Exception e)
-        {
-            Console.WriteLine(e.Message);
-        }
+        await DrawAsync();
     }
 
     public async Task DrawAsync()
@@ -103,7 +119,9 @@
         CurrentAngle += (ANGLE_STEP * elapsedMilliseconds) / 1000.0f;
         CurrentAngle %= 360.0f;
 
+        double fps = 1.0 / (DateTime.Now - LastRender).TotalSeconds;
         LastRender = now;
+        // Console.WriteLine(fps);
 
         await WebGLCtx.ClearAsync(BufferBits.COLOR_BUFFER_BIT | BufferBits.DEPTH_BUFFER_BIT);
 
@@ -118,10 +136,13 @@
         redGearMatrix.Translate(-3.0f, -1.7f, 0.0f);
         redGearMatrix.Rotate(CurrentAngle, 0.0f, 0.0f, 1.0f);
 
-        float[] red = new[] { 0.8f, 0.1f, 0.0f };
-        List<float> gear = Gear(1.0f, 4.0f, 1.0f, 20, 0.7f, red);
+        if (RedGear is null) {
+            float[] red = new[] { 0.8f, 0.1f, 0.0f };
 
-        await DrawGearAsync(redGearMatrix, gear);
+            RedGear = Gear(1.0f, 4.0f, 1.0f, 20, 0.7f, red);
+        }
+
+        await DrawGearAsync(redGearMatrix, RedGear);
 
         /*
          * Green Gear
@@ -134,10 +155,12 @@
         greenGearMatrix.Translate(3.1f, -1.7f, 0.0f);
         greenGearMatrix.Rotate(-2.0f * CurrentAngle - 9.0f, 0.0f, 0.0f, 1.0f);
 
-        float[] green = new[] { 0.0f, 0.8f, 0.2f };
-        gear = Gear(0.5f, 2.0f, 2.0f, 10, 0.7f, green);
+        if (GreenGear is null) {
+            float[] green = new[] { 0.0f, 0.8f, 0.2f };
+            GreenGear = Gear(0.5f, 2.0f, 2.0f, 10, 0.7f, green);
+        }
 
-        await DrawGearAsync(greenGearMatrix, gear);
+        await DrawGearAsync(greenGearMatrix, GreenGear);
 
         /*
          * Blue Gear
@@ -150,11 +173,12 @@
         blueGearMatrix.Translate(-3.1f, 4.5f, 0.0f);
         blueGearMatrix.Rotate(-2.0f * CurrentAngle - 25.0f, 0.0f, 0.0f, 1.0f);
 
-        float[] blue = new[] { 0.2f, 0.2f, 1.0f };
+        if (BlueGear is null) {
+            float[] blue = new[] { 0.2f, 0.2f, 1.0f };
+            BlueGear = Gear(0.5f, 2.0f, 2.0f, 10, 0.7f, blue);
+        }
 
-        gear = Gear(0.5f, 2.0f, 2.0f, 10, 0.7f, blue);
-
-        await DrawGearAsync(blueGearMatrix, gear);
+        await DrawGearAsync(blueGearMatrix, BlueGear);
     }
 
     public async Task DrawGearAsync(Matrix4 modelMatrix, List<float> gear)
@@ -168,7 +192,7 @@
         Matrix4 mvpMatrix = new();
         mvpMatrix.SetOrtho(-1.0f, 1.0f,  -h, h,  1.0f, 70.0f);
         // TODO: why do we need this?
-        mvpMatrix.Scale(0.13f, 0.13f, 0.13f);
+        mvpMatrix.Scale(0.10f, 0.10f, 0.10f);
 
         mvpMatrix.Multiply(modelMatrix);
 

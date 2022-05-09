@@ -7,11 +7,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 
     <title>GlxGears</title>
-
-    <base href="/" />
 </head>
 
 <body>
+    <style>
+        * 
+        {
+            margin: 0px;
+            padding: 0px;
+            border: 0px;
+            overflow: hidden;
+        }
+    </style>
+
     <div id="app">Loading...</div>
 
     <script src="_framework/blazor.webassembly.js"></script>
@@ -19,18 +27,31 @@
     <script src="_content/Blazor.Extensions.Canvas/blazor.extensions.canvas.js"></script>
 
     <script>
-        function renderJS(timeStamp)
-        {
-            theInstance.invokeMethodAsync('RenderInBlazor', timeStamp);
+        window.JsFunctions = {
+            initRenderJs: function (instance) {
+                window.theInstance = instance;
 
-            window.requestAnimationFrame(renderJS);
-        }
+                window.requestAnimationFrame(window.JsFunctions.renderJs);
+            },
+            renderJs: function(timeStamp) {
+                theInstance.invokeMethodAsync('RenderInBlazor', timeStamp);
 
-        window.initRenderJS = (instance) =>
-        {
-            window.theInstance = instance;
+                window.requestAnimationFrame(window.JsFunctions.renderJs);
+            },
+            addResizeListenerEvent: function (foo) {
+                window.addEventListener('resize', function (e)
+                {
+                    var html = document.getElementsByTagName("html")[0];
 
-            window.requestAnimationFrame(renderJS);
+                    theInstance.invokeMethodAsync('ResizeInBlazor',
+                        html.clientWidth, html.clientHeight);
+                });
+
+                var html = document.getElementsByTagName("html")[0];
+
+                theInstance.invokeMethodAsync('ResizeInBlazor',
+                    html.clientWidth, html.clientHeight);
+            }
         };
     </script>
 </body>
